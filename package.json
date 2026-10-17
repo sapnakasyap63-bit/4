@@ -1,0 +1,13 @@
+{
+  "name": "discord-mc-bot-hub",
+  "version": "1.0.0",
+  "main": "index.js",
+  "dependencies": {
+    "mineflayer": "^4.24.0",
+    "discord.js": "^14.16.3",
+    "express": "^4.19.2"
+  },
+  "scripts": {
+    "start": "node index.js"
+  }
+}
