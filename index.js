@@ -2,11 +2,13 @@ const { Client, GatewayIntentBits } = require('discord.js');
 const mineflayer = require('mineflayer');
 const express = require('express');
 
+// ---- WEB SERVER (RENDER KEEP-ALIVE) ----
 const app = express();
 const PORT = process.env.PORT || 3000;
 app.get('/', (req, res) => res.send('🌐 VorstyAFK Worker Node Online 24/7!'));
 app.listen(PORT, () => console.log(`🌐 Keep-alive server running on port ${PORT}`));
 
+// ---- DISCORD BOT SETUP ----
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
@@ -21,10 +23,11 @@ client.once('ready', () => {
     console.log(`🤖 AFK Worker Bot logged in as ${client.user.tag}`);
 });
 
+// ---- DISCORD COMMAND LISTENER ----
 client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
 
-    // Syntax: $deploy <botName> <server_ip> [port]
+    // Command Syntax: $deploy <botName> <server_ip> [port]
     if (message.content.startsWith('$deploy')) {
         const args = message.content.split(/\s+/);
         const botName = args[1];
@@ -40,11 +43,12 @@ client.on('messageCreate', async (message) => {
             port = parseInt(rawPort);
         }
 
+        // Clean up previous instance if running
         if (activeBots.has(botName)) {
             const existing = activeBots.get(botName);
             if (existing && existing.instance) {
                 existing.shouldReconnect = false;
-                existing.instance.quit();
+                try { existing.instance.quit(); } catch (e) {}
             }
             activeBots.delete(botName);
         }
@@ -55,6 +59,7 @@ client.on('messageCreate', async (message) => {
         launchMinecraftBot(botName, ip, port, message);
     }
 
+    // Manual Stop Command: $stopbot <botName>
     if (message.content.startsWith('$stopbot')) {
         const args = message.content.split(/\s+/);
         const botName = args[1];
@@ -62,7 +67,7 @@ client.on('messageCreate', async (message) => {
             const botState = activeBots.get(botName);
             botState.shouldReconnect = false;
             if (botState.instance) {
-                botState.instance.quit();
+                try { botState.instance.quit(); } catch (e) {}
             }
             activeBots.delete(botName);
             return message.reply(`🛑 Bot node \`${botName}\` stopped and connection blocked.`);
@@ -72,24 +77,33 @@ client.on('messageCreate', async (message) => {
     }
 });
 
+// ---- MINECRAFT AUTOMATION ENGINE ----
 function launchMinecraftBot(botName, host, port, discordContext) {
-    console.log(`📡 Connecting client ${botName} to ${host}:${port || 25565}`);
+    console.log(`📡 Connecting client ${botName} to ${host}:${port || 'default'}`);
 
     const botPassword = `VorstyPass_${Math.floor(100 + Math.random() * 900)}`;
 
+    // Fixed Mineflayer Connection Options
     const botOptions = {
         host: host,
         username: botName,
         auth: 'offline',
-        viewDistance: 'tiny',
-        checkTimeoutInterval: 60000 // Timeout badha diya hai taaki connection drop na ho
+        version: false, // Auto-detect server MC version (Fixes protocol mismatch)
+        checkTimeoutInterval: 90000,
+        viewDistance: 'tiny'
     };
 
     if (port) {
         botOptions.port = port;
     }
 
-    const bot = mineflayer.createBot(botOptions);
+    let bot;
+    try {
+        bot = mineflayer.createBot(botOptions);
+    } catch (err) {
+        const errMsg = err.message || err.toString() || 'Unknown instantiation error';
+        return discordContext.channel.send(`❌ **Launch Error:** Failed to create bot \`${botName}\`: \`${errMsg}\``);
+    }
 
     const botState = {
         instance: bot,
@@ -101,6 +115,7 @@ function launchMinecraftBot(botName, host, port, discordContext) {
 
     activeBots.set(botName, botState);
 
+    // Auto Register & Login
     bot.on('message', (jsonMsg) => {
         const chatMessage = jsonMsg.toString().toLowerCase();
 
@@ -108,7 +123,6 @@ function launchMinecraftBot(botName, host, port, discordContext) {
             setTimeout(() => {
                 if (bot && bot.entity) {
                     bot.chat(`/register ${botPassword}${botPassword}`);
-                    console.log(`🔑 [${botName}] Sent register command.`);
                 }
             }, 1500);
         }
@@ -117,7 +131,6 @@ function launchMinecraftBot(botName, host, port, discordContext) {
             setTimeout(() => {
                 if (bot && bot.entity) {
                     bot.chat(`/login ${botPassword}`);
-                    console.log(`🔑 [${botName}] Sent login command.`);
                 }
             }, 1500);
         }
@@ -125,8 +138,8 @@ function launchMinecraftBot(botName, host, port, discordContext) {
 
     bot.once('spawn', () => {
         const targetStr = port ? `${host}:${port}` : host;
-        console.log(`[${botName}] Successfully spawned in game at${targetStr}`);
-        discordContext.channel.send(`✅ Client \`${botName}\` successfully joined server \`${targetStr}\`!`);
+        console.log(`[${botName}] Successfully joined${targetStr}`);
+        discordContext.channel.send(`✅ Client \`${botName}\` successfully attached to \`${targetStr}\`!`);
 
         setTimeout(() => {
             if (bot && bot.entity) {
@@ -135,6 +148,7 @@ function launchMinecraftBot(botName, host, port, discordContext) {
             }
         }, 2000);
 
+        // Movement Loop
         botState.moveLoop = setInterval(() => {
             if (!bot || !bot.entity) return;
             const randomYaw = (Math.random() * 360) * (Math.PI / 180);
@@ -148,14 +162,16 @@ function launchMinecraftBot(botName, host, port, discordContext) {
             setTimeout(() => { if (bot && bot.entity) bot.setControlState(chosenDir, false); }, 3000);
         }, 4000);
 
+        // Jump Loop
         botState.jumpLoop = setInterval(() => {
             if (!bot || !bot.entity) return;
             bot.setControlState('jump', true);
             setTimeout(() => { if (bot && bot.entity) bot.setControlState('jump', false); }, 500);
         }, 11000);
 
+        // Ad Message Loop
         botState.chatLoop = setInterval(() => {
-            if (!bot.entity) return;
+            if (!bot || !bot.entity) return;
             bot.chat("MADE BY - VORSTYAFK");
         }, 30 * 60000);
     });
@@ -164,23 +180,27 @@ function launchMinecraftBot(botName, host, port, discordContext) {
         try { bot.respawn(); } catch (err) {}
     });
 
+    // Disconnect Handler
     bot.on('end', (reason) => {
         console.log(`🔌 [${botName}] Disconnected. Reason: ${reason}`);
         clearInterval(botState.moveLoop);
         clearInterval(botState.jumpLoop);
         clearInterval(botState.chatLoop);
 
+        const cleanReason = reason || 'Server refused connection (socket closed)';
         try {
-            discordContext.channel.send(`⚠️ **Alert:** Bot node \`${botName}\` disconnected. Reason: \`${reason}\`.`);
+            discordContext.channel.send(`⚠️ **Alert:** Bot node \`${botName}\` disconnected. Reason: \`${cleanReason}\`.`);
         } catch (e) {}
 
         activeBots.delete(botName);
     });
 
+    // Error Handler with proper error extraction
     bot.on('error', (err) => {
-        console.log(`[${botName}] Connection Error:${err.message}`);
+        const errorDetails = err?.message || err?.code || (typeof err === 'object' ? JSON.stringify(err) : String(err));
+        console.log(`[${botName}] Error:${errorDetails}`);
         try {
-            discordContext.channel.send(`❌ **Error Alert:** Bot node \`${botName}\` error: \`${err.message}\``);
+            discordContext.channel.send(`❌ **Error Alert:** Bot node \`${botName}\` error: \`${errorDetails}\``);
         } catch (e) {}
     });
 }
